@@ -1,0 +1,85 @@
+version: "3.4"
+services:
+  nestjs:
+    build: ./nestjs-api
+    container_name: nestjs-api
+    cpu_shares: 512  # Assign 25% of CPU to nestjs
+    mem_limit: 256m  # Limit memory to 256MB for nestjs
+    mem_reservation: 128m  # Reserve at least 128MB of memory for nestjs
+    ports:
+      - 4000:3000
+    volumes:
+      - ./nestjs-api/src:/app/src
+      - ./nestjs-api/test:/app/test
+      - ./nestjs-api/prisma:/app/prisma
+    platform: linux/x86_64
+    command: bash -c "yarn prisma generate && yarn prisma migrate deploy && yarn start:prod"
+    environment:
+      DATABASE_URL: "mysql://root:pass1234@mysql:3306/db"
+    depends_on:
+      mysql:
+        condition: service_healthy
+    healthcheck:
+      test: curl -f http://localhost:3000/post/1 || exit 1
+  mysql:
+    image: mysql:8
+    container_name: mysql
+    cpu_shares: 512  # Assign 25% of CPU to mysql
+    mem_limit: 256m  # Limit memory to 256MB for mysql
+    mem_reservation: 128m  # Reserve at least 128MB of memory for mysql
+    platform: linux/x86_64
+    restart: unless-stopped
+    environment:
+      MYSQL_ROOT_PASSWORD: pass1234
+      MYSQL_DATABASE: db
+    ports:
+      - ${DATABASE_PORT:-3306}:3306
+    volumes:
+      - ./dbdata:/var/lib/mysql
+    healthcheck:
+      test: curl -f http://localhost:3306 || exit 1
+  phpmyadmin:
+    image: phpmyadmin/phpmyadmin
+    container_name: phpmyadmin
+    platform: linux/x86_64
+    environment:
+      PMA_HOST: mysql
+      PMA_PORT: 3306
+      PMA_ARBITRARY: 1
+      UPLOAD_LIMIT: 512M
+    restart: unless-stopped
+    depends_on:
+      - mysql
+    ports:
+      - ${FORWARD_PMA_PORT:-81}:80
+  influxdb:
+    image: influxdb:1.8
+    container_name: influxdb
+    ports:
+      - "8086:8086"
+    environment:
+      - INFLUXDB_DB=k6
+  grafana:
+    image: grafana/grafana-enterprise:latest
+    container_name: grafana
+    ports:
+      - "3000:3000"
+    environment:
+      - GF_AUTH_ANONYMOUS_ORG_ROLE=Admin
+      - GF_AUTH_ANONYMOUS_ENABLED=true
+      - GF_AUTH_BASIC_ENABLED=false
+    volumes:
+      - ./grafana:/etc/grafana/provisioning/
+  k6:
+    build: load/k6
+    container_name: k6
+    cpu_shares: 512  # Assign 25% of CPU to k6
+    mem_limit: 256m  # Limit memory to 256MB for k6
+    mem_reservation: 128m  # Reserve at least 128MB of memory for k6
+    environment:
+      - K6_OUT=influxdb=http://influxdb:8086/k6
+      - MAX_VUS=3000
+      - API_DOMAIN=http://nestjs:3000
+    depends_on:
+      nestjs:
+        condition: service_healthy
